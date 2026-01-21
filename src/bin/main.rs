@@ -7,6 +7,9 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+use embassy_embedded_hal::adapter::BlockingAsync;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use esp_bootloader_esp_idf::partitions::FlashRegion;
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use esp_hal::peripherals::TIMG0;
@@ -14,8 +17,10 @@ use esp_hal::time::{Duration, Instant};
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble;
 use esp_radio::ble::controller::BleConnector;
+use esp_storage::FlashStorage;
 use esp32_tamagotchi::factory::factory::Factory;
 use esp32_tamagotchi::peripherals::timer::TimerPeripherals;
+use esp32_tamagotchi::service::ble::advertise_service::AdvertiseService;
 use log::info;
 use trouble_host::Address;
 use trouble_host::prelude::{BdAddr, EventHandler, ExternalController};
@@ -44,6 +49,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 1;
 
+
 #[esp_rtos::main]
 async fn main(_s: embassy_executor::Spawner) {
     // generator version: 1.1.0
@@ -59,7 +65,15 @@ async fn main(_s: embassy_executor::Spawner) {
     let timg0 = Factory::create_timer_group0(timer_peripherals);
     esp_rtos::start(timg0.timer0);
 
+    // Init RNG
+    let _trng_source = esp_hal::rng::TrngSource::new(peripherals.RNG, peripherals.ADC1);
+    let mut trng = esp_hal::rng::Trng::try_new().unwrap();
 
+    // Init Flash and Storage
+    let flash = BlockingAsync::new(FlashStorage::new(peripherals.FLASH));
+    let mut storage = esp32_tamagotchi::service::ble::storage_service::init_storage(flash);
+    
+    // Init BLE
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
     let device_ble = peripherals.BT;
     let ble_config = ble::Config::default();
@@ -71,46 +85,59 @@ async fn main(_s: embassy_executor::Spawner) {
     let address = Address::random([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]);
     info!("Our address = {:?}", address);
 
-    //
+    // Set BLE Config
     let mut resources: trouble_host::HostResources<trouble_host::prelude::DefaultPacketPool,CONNECTIONS_MAX,L2CAP_CHANNELS_MAX>  = trouble_host::HostResources::new();
     let stack = trouble_host::new(controller, &mut resources).set_random_address(address);
+    let stack = &stack;
 
     let trouble_host::Host {
         central, 
         mut runner, 
+        mut peripheral,
         ..
     } = stack.build();
 
-    let printer = Printer {
-        seen: RefCell::new(Deque::new()),
-    };
-    let mut scanner = Scanner::new(central);
-    let _ = join(runner.run_with_handler(&printer), async {
-        let mut config = ScanConfig::default();
-        config.active = true;
-        config.phys = PhySet::M1;
-        config.interval = embassy_time::Duration::from_secs(1);
-        config.window = embassy_time::Duration::from_secs(1);
-        let mut _session = scanner.scan(&config).await.unwrap();
-        
-        
-        // Scan forever
+    // WAITING CONECTION PART
+    let mut advertise_service = AdvertiseService::new("Tamagotchi").await;
+    let attribute_table: AttributeTable<'_, CriticalSectionRawMutex, CONNECTIONS_MAX> = AttributeTable::new();
+    let mut server = AttributeServer::new(
+        attribute_table
+    );
+    let bond_stored = false;
+
+    let _ = join(runner.run(), async {
         loop {
-            embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+            info!("Advertising, waiting for connection...");
+            let conn = advertise_service.advertise(&mut peripheral, &mut server).await;
+
+            let raw = conn.raw();
+            raw.set_bondable(!bond_stored).unwrap();
+
+            info!("Connection established");
         }
     })
     .await;
 
-    // loop {
-    //     info!("Hello world!");
-    //     let delay_start = Instant::now();
-
-
-
-    //     while delay_start.elapsed() < Duration::from_millis(500) {}
-
-
-    // }
+    // SCANING PART
+    // let printer = Printer {
+    //     seen: RefCell::new(Deque::new()),
+    // };
+    // let mut scanner = Scanner::new(central);
+    // let _ = join(runner.run_with_handler(&printer), async {
+    //     let mut config = ScanConfig::default();
+    //     config.active = true;
+    //     config.phys = PhySet::M1;
+    //     config.interval = embassy_time::Duration::from_secs(1);
+    //     config.window = embassy_time::Duration::from_secs(1);
+    //     let mut _session = scanner.scan(&config).await.unwrap();
+        
+        
+    //     // Scan forever
+    //     loop {
+    //         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+    //     }
+    // })
+    // .await;
 }
 
 struct Printer {
