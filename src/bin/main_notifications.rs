@@ -9,24 +9,21 @@
 
 use embassy_embedded_hal::adapter::BlockingAsync;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use esp_bootloader_esp_idf::partitions::FlashRegion;
 use esp_hal::clock::CpuClock;
-use esp_hal::main;
-use esp_hal::peripherals::TIMG0;
-use esp_hal::time::{Duration, Instant};
-use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble;
 use esp_radio::ble::controller::BleConnector;
 use esp_storage::FlashStorage;
 use esp32_tamagotchi::factory::factory::Factory;
 use esp32_tamagotchi::peripherals::timer::TimerPeripherals;
 use esp32_tamagotchi::service::ble::advertise_service::AdvertiseService;
-use esp32_tamagotchi::service::ble::gatt_service::{self, GattService};
-use esp32_tamagotchi::service::ble::storage_service::{get_first_bonded, load_bonding_info};
+use esp32_tamagotchi::service::ble::gatt_service::GattService;
+use esp32_tamagotchi::service::ble::storage_service::get_first_bonded;
+// Novos imports para notificações
+use esp32_tamagotchi::service::ble::notification_service::{ NotificationService, TamagotchiStatus };
+use esp32_tamagotchi::service::ble::notification_helper::NotificationHelper;
 use log::info;
 use trouble_host::Address;
-use trouble_host::prelude::{BdAddr, EventHandler, ExternalController};
-use embassy_executor::Spawner;
+use trouble_host::prelude::{ BdAddr, EventHandler, ExternalController };
 use core::cell::RefCell;
 use heapless::Deque;
 use trouble_host::prelude::*;
@@ -34,7 +31,8 @@ use embassy_futures::join::join;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
+    loop {
+    }
 }
 
 extern crate alloc;
@@ -47,12 +45,11 @@ esp_bootloader_esp_idf::esp_app_desc!();
     clippy::large_stack_frames,
     reason = "it's not unusual to allocate larger buffers etc. in main"
 )]
-
 const CONNECTIONS_MAX: usize = 1;
 const DESCRIPTORS_MAX: usize = 3;
 const L2CAP_CHANNELS_MAX: usize = 4;
 const BLE_STACK_RESOURCES_MAX: usize = 20;
-
+const ATTRIBUTE_TABLE_SIZE: usize = 20; // Tamanho suficiente para o NotificationService
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) {
@@ -77,7 +74,7 @@ async fn main(_spawner: embassy_executor::Spawner) {
     // Init Flash and Storage
     let flash = BlockingAsync::new(FlashStorage::new(peripherals.FLASH));
     let mut storage = esp32_tamagotchi::service::ble::storage_service::init_storage(flash);
-    
+
     // Init BLE
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
     let device_ble = peripherals.BT;
@@ -86,14 +83,20 @@ async fn main(_spawner: embassy_executor::Spawner) {
         Ok(ble) => ble,
         Err(e) => panic!("Failed to initialize BLE: {:?}", e),
     };
-    let controller: ExternalController<BleConnector<'_>, BLE_STACK_RESOURCES_MAX> = ExternalController::new(ble);    
-    let address = Address::random([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]);
+    let controller: ExternalController<BleConnector<'_>, 20> = ExternalController::new(ble);
+    let address = Address::random([0xde, 0xad, 0xbe, 0xef, 0x00, 0x01]);
     info!("Our address = {:?}", address);
 
     info!("Set BLE Config");
-    let mut resources: trouble_host::HostResources<DefaultPacketPool,CONNECTIONS_MAX,L2CAP_CHANNELS_MAX>  = trouble_host::HostResources::new();
-    let stack = trouble_host::new(controller, &mut resources).set_random_address(address)
-    .set_random_generator_seed(&mut trng);
+    let mut resources: trouble_host::HostResources<
+        trouble_host::prelude::DefaultPacketPool,
+        CONNECTIONS_MAX,
+        L2CAP_CHANNELS_MAX
+    > = trouble_host::HostResources::new();
+    let stack = trouble_host
+        ::new(controller, &mut resources)
+        .set_random_address(address)
+        .set_random_generator_seed(&mut trng);
     //let stack = &stack;
 
     info!("Loading bonded devices from storage");
@@ -113,96 +116,93 @@ async fn main(_spawner: embassy_executor::Spawner) {
         }
     }
 
-
     info!("Init Host");
-    // let trouble_host::Host {
-    //     mut runner, 
-    //     mut peripheral,
-    //     ..
-    // } = stack.build();
     let host = stack.build();
-    
+
     info!("Init peripheral");
     let mut peripheral = host.peripheral;
     info!("Init runner");
     let mut runner = host.runner;
-    
 
-    info!("Starting advertising loop...");
+    info!("Starting advertising loop with notifications support...");
     let _ = join(runner.run(), async {
         loop {
             let mut advertise_service = AdvertiseService::new("Tamagotchi").await;
-            let attribute_table: AttributeTable<'_, CriticalSectionRawMutex, L2CAP_CHANNELS_MAX> = AttributeTable::new();
-            let mut server = AttributeServer::new(
-                attribute_table
-            );
-            
+
+            // Criar tabela de atributos com tamanho adequado
+            let mut attribute_table: AttributeTable<
+                '_,
+                CriticalSectionRawMutex,
+                ATTRIBUTE_TABLE_SIZE
+            > = AttributeTable::new();
+
+            // Criar e registrar serviço de notificações
+            let notification_service = NotificationService::new(&mut attribute_table);
+
+            let mut server = AttributeServer::new(attribute_table);
 
             info!("Advertising, waiting for connection...");
-            let conn = 
-                advertise_service.advertise::
-                    <
-                        ExternalController<_, BLE_STACK_RESOURCES_MAX>, 
-                        L2CAP_CHANNELS_MAX, 
-                        DESCRIPTORS_MAX, 
-                        CONNECTIONS_MAX
-                    >
-                (&mut peripheral, &mut server)
-                .await;
+            let conn = advertise_service.advertise::<
+                ExternalController<_, BLE_STACK_RESOURCES_MAX>,
+                ATTRIBUTE_TABLE_SIZE,
+                DESCRIPTORS_MAX,
+                CONNECTIONS_MAX
+            >(&mut peripheral, &mut server).await;
 
             let raw: &Connection<'_, DefaultPacketPool> = conn.raw();
             raw.set_bondable(!bond_stored).unwrap();
 
+            // Enviar notificação de boas-vindas
+            info!("Sending welcome notification...");
+            let _ = NotificationHelper::send_message(
+                &notification_service,
+                &conn,
+                b"Conectado!"
+            ).await;
+
             let gatt_service = GattService::new();
             let gatt_task = gatt_service.handle_gatt_events(&mut storage, &conn, &mut bond_stored);
-            
-            // Keep connection alive without needing stack reference
-            let keep_alive_task = esp32_tamagotchi::service::ble::advertise_service::keep_connection_alive(&conn, &stack);
 
-            embassy_futures::select::select(gatt_task, keep_alive_task).await;
+            // Keep connection alive
+            let keep_alive_task =
+                esp32_tamagotchi::service::ble::advertise_service::keep_connection_alive(
+                    &conn,
+                    &stack
+                );
+
+            // Task de notificações periódicas
+            let notification_task = async {
+                let mut counter = 0u32;
+
+                loop {
+                    embassy_time::Timer::after(embassy_time::Duration::from_secs(10)).await;
+                    // A cada 20 segundos (contador par), mudar status
+                    if counter % 2 == 0 {
+                        let status_index = (counter / 2) % 6;
+                        let status = match status_index {
+                            0 => TamagotchiStatus::Happy,
+                            1 => TamagotchiStatus::Hungry,
+                            2 => TamagotchiStatus::Tired,
+                            3 => TamagotchiStatus::Sick,
+                            4 => TamagotchiStatus::Playing,
+                            _ => TamagotchiStatus::Sleeping,
+                        };
+
+                        info!("[notification_task] Sending status: {:?}", status);
+                        let _ = NotificationHelper::send_tamagotchi_status(
+                            &notification_service,
+                            &conn,
+                            status
+                        ).await;
+                    }
+                    counter += 1;
+                }
+            };
+
+            // Executar todas as tasks em paralelo
+            embassy_futures::select::select3(gatt_task, keep_alive_task, notification_task).await;
 
             info!("Connection dropped, restarting advertising...");
         }
-    })
-    .await;
-
-    // SCANING PART
-    // let printer = Printer {
-    //     seen: RefCell::new(Deque::new()),
-    // };
-    // let mut scanner = Scanner::new(central);
-    // let _ = join(runner.run_with_handler(&printer), async {
-    //     let mut config = ScanConfig::default();
-    //     config.active = true;
-    //     config.phys = PhySet::M1;
-    //     config.interval = embassy_time::Duration::from_secs(1);
-    //     config.window = embassy_time::Duration::from_secs(1);
-    //     let mut _session = scanner.scan(&config).await.unwrap();
-        
-        
-    //     // Scan forever
-    //     loop {
-    //         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-    //     }
-    // })
-    // .await;
-}
-
-struct Printer {
-    seen: RefCell<Deque<BdAddr, 128>>,
-}
-
-impl EventHandler for Printer {
-    fn on_adv_reports(&self, mut it: LeAdvReportsIter<'_>) {
-        let mut seen = self.seen.borrow_mut();
-        while let Some(Ok(report)) = it.next() {
-            if seen.iter().find(|b| b.raw() == report.addr.raw()).is_none() {
-                info!("discovered: {:?}", report.addr);
-                if seen.is_full() {
-                    seen.pop_front();
-                }
-                seen.push_back(report.addr).unwrap();
-            }
-        }
-    }
+    }).await;
 }

@@ -1,5 +1,8 @@
+use core::usize;
+
 use embassy_sync::blocking_mutex::{CriticalSectionMutex, raw::{CriticalSectionRawMutex, NoopRawMutex}};
-use trouble_host::{Controller, advertise, gatt::GattConnection, prelude::{AdStructure, AdvertisementParameters, AttributeServer, DefaultPacketPool, Peripheral, TxPower}};
+use log::{error, info};
+use trouble_host::{Controller, Stack, advertise, gatt::GattConnection, prelude::{AdStructure, AdvertisementParameters, AttributeServer, Connection, DefaultPacketPool, Peripheral, TxPower}};
 
 
 pub struct AdvertiseService {
@@ -30,11 +33,10 @@ impl AdvertiseService {
         }
     } 
 
-    pub async fn advertise<'a, 'server, C: Controller>(
+    pub async fn advertise<'a, 'server, C: Controller, const ATT: usize, const CCCD: usize, const CONN: usize>(
         &mut self,
         peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
-        server: &'server mut AttributeServer<'a, CriticalSectionRawMutex, DefaultPacketPool, 1, 1, 1>,
-
+        server: &'server mut AttributeServer<'a, CriticalSectionRawMutex, DefaultPacketPool, ATT, CCCD, CONN>,
     ) -> GattConnection<'a, 'server, DefaultPacketPool> {
 
         let adv_params = AdvertisementParameters {
@@ -67,6 +69,33 @@ impl AdvertiseService {
                 }
             },
             Err(e) => panic!("Failed to accept connection: {:?}", e),
+        }
+    }
+}
+
+pub async fn keep_connection_alive<'a, 'server, C: Controller>(
+    conn: &GattConnection<'a, 'server, DefaultPacketPool>,
+    stack: &Stack<'a, C, DefaultPacketPool>,
+) {
+    loop {
+
+        let server = conn.raw();
+
+        if server.is_connected() {
+
+            match server.rssi(stack).await {
+                Ok(rssi) => {
+                    info!("[connection] RSSI: {} dBm", rssi);
+                },
+                Err(e) => {
+                    error!("[connection] Failed to read RSSI: {:?}", e);
+                    break;
+                }
+            }
+
+            embassy_time::Timer::after(embassy_time::Duration::from_secs(2)).await;
+        } else {
+            break;
         }
     }
 }

@@ -1,4 +1,5 @@
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
+use log::info;
 use trouble_host::prelude::{BdAddr, SecurityLevel};
 use trouble_host::{BondInformation, Identity, LongTermKey};
 use sequential_storage::cache::NoCache;
@@ -63,7 +64,7 @@ impl<'a> Value<'a> for StoredBondInformation {
     }
 }
 
-async fn store_bonding_info<S: MultiwriteNorFlash>(
+pub async fn store_bonding_info<S: MultiwriteNorFlash>(
     storage: &mut MapStorage<StorageAddr, S, NoCache>,
     info: &BondInformation,
 ) -> Result<(), sequential_storage::Error<S::Error>> {
@@ -76,15 +77,19 @@ async fn store_bonding_info<S: MultiwriteNorFlash>(
         security_level: info.security_level,
     };
 
+    // Try to remove existing entry, but ignore Corrupted errors (storage might be uninitialized)
     match storage.remove_item(&mut buffer, &key).await {
         Ok(_) => {}
+        Err(sequential_storage::Error::Corrupted {}) => {
+            // Storage is uninitialized/corrupted, just proceed to store
+        }
         Err(e) => return Err(e),
     }
 
     storage.store_item(&mut buffer, &key, &value).await
 }
 
-async fn load_bonding_info<S: MultiwriteNorFlash>(
+pub async fn load_bonding_info<S: MultiwriteNorFlash>(
     storage: &mut MapStorage<StorageAddr, S, NoCache>,
     addr: &BdAddr,
 ) -> Result<Option<BondInformation>, sequential_storage::Error<S::Error>> {
@@ -110,8 +115,47 @@ async fn load_bonding_info<S: MultiwriteNorFlash>(
     }
 }
 
+pub async fn get_first_bonded<S: MultiwriteNorFlash>(
+    storage: &mut MapStorage<StorageAddr, S, NoCache>,
+) -> Result<Option<BondInformation>, sequential_storage::Error<S::Error>> {
+    let mut buffer = [0; 32];
+    
+    // Fetch the first item from storage
+    let mut iter = 
+        match storage.fetch_all_items(&mut buffer).await {
+            Ok(iter) => iter,
+            Err(sequential_storage::Error::Corrupted {  }) => {
+                info!("Storage is uninitialized or corrupted, treating as empty");
+                return Ok(None);
+            },
+            Err(e) => {
+                info!("Error fetching items from storage: {:?}", e);
+                return Err(e);
+            },
+        };
+    info!("Fetching first bonded device from storage...");
+
+    match iter.next::<StoredBondInformation>(&mut buffer).await {
+        Ok(Some((key, stored))) => {
+            
+            info!("Loaded bonded device with address: {:?}", key.0);
+            let bond_info = BondInformation {
+                identity: Identity {
+                    bd_addr: key.0,
+                    irk: None,
+                },
+                ltk: stored.ltk,
+                security_level: stored.security_level,
+                is_bonded: true,
+            };
+            Ok(Some(bond_info))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
 pub fn init_storage<S: MultiwriteNorFlash>(flash: S) -> MapStorage<StorageAddr, S, NoCache> {
-    let map_config = MapConfig::new(0x1000..0x3000);
+let map_config = MapConfig::new(0x3F0000..0x3F8000); // Last 32KB of 4MB flash
 
     MapStorage::new(flash, map_config, NoCache {})
 }
