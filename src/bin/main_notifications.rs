@@ -19,8 +19,8 @@ use esp32_tamagotchi::service::ble::advertise_service::AdvertiseService;
 use esp32_tamagotchi::service::ble::gatt_service::GattService;
 use esp32_tamagotchi::service::ble::storage_service::get_first_bonded;
 // Novos imports para notificações
-use esp32_tamagotchi::service::ble::notification_service::{ NotificationService, TamagotchiStatus };
-use esp32_tamagotchi::service::ble::notification_helper::NotificationHelper;
+use esp32_tamagotchi::service::ble::notification_characteristics::{ NotificationCharacteristics, TamagotchiStatus };
+use esp32_tamagotchi::service::ble::notification_service::NotificationService;
 use log::info;
 use trouble_host::Address;
 use trouble_host::prelude::{ BdAddr, EventHandler, ExternalController };
@@ -49,7 +49,7 @@ const CONNECTIONS_MAX: usize = 1;
 const DESCRIPTORS_MAX: usize = 3;
 const L2CAP_CHANNELS_MAX: usize = 4;
 const BLE_STACK_RESOURCES_MAX: usize = 20;
-const ATTRIBUTE_TABLE_SIZE: usize = 20; // Tamanho suficiente para o NotificationService
+const ATTRIBUTE_TABLE_SIZE: usize =  20; // Tamanho suficiente para o NotificationService
 
 #[esp_rtos::main]
 async fn main(_spawner: embassy_executor::Spawner) {
@@ -137,7 +137,7 @@ async fn main(_spawner: embassy_executor::Spawner) {
             > = AttributeTable::new();
 
             // Criar e registrar serviço de notificações
-            let notification_service = NotificationService::new(&mut attribute_table);
+            let notification_service = NotificationCharacteristics::new(&mut attribute_table);
 
             let mut server = AttributeServer::new(attribute_table);
 
@@ -154,7 +154,7 @@ async fn main(_spawner: embassy_executor::Spawner) {
 
             // Enviar notificação de boas-vindas
             info!("Sending welcome notification...");
-            let _ = NotificationHelper::send_message(
+            let _ = NotificationService::send_message(
                 &notification_service,
                 &conn,
                 b"Conectado!"
@@ -189,7 +189,7 @@ async fn main(_spawner: embassy_executor::Spawner) {
                         };
 
                         info!("[notification_task] Sending status: {:?}", status);
-                        let _ = NotificationHelper::send_tamagotchi_status(
+                        let _ = NotificationService::send_tamagotchi_status(
                             &notification_service,
                             &conn,
                             status

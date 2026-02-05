@@ -4,4 +4,4 @@ pub mod storage_service;
 pub mod advertise_service;
 pub mod gatt_service;
 pub mod notification_service;
-pub mod notification_helper;
+pub mod notification_characteristics;
