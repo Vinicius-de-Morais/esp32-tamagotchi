@@ -7,14 +7,11 @@ use crate::service::ble::storage_service::{self, StorageAddr};
 
 
 pub struct GattService {
-    notification_counter: u32,
 }
 
 impl GattService {
     pub fn new() -> Self {
-        GattService {
-            notification_counter: 0,
-        }
+        GattService {}
     }
 
     pub fn handle_disconect_event(&self) {

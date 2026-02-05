@@ -1,4 +1,4 @@
-use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
+use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use log::info;
 use trouble_host::prelude::{BdAddr, SecurityLevel};
 use trouble_host::{BondInformation, Identity, LongTermKey};

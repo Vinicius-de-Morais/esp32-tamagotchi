@@ -9,26 +9,18 @@
 
 use embassy_embedded_hal::adapter::BlockingAsync;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use esp_bootloader_esp_idf::partitions::FlashRegion;
 use esp_hal::clock::CpuClock;
-use esp_hal::main;
-use esp_hal::peripherals::TIMG0;
-use esp_hal::time::{Duration, Instant};
-use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble;
 use esp_radio::ble::controller::BleConnector;
 use esp_storage::FlashStorage;
 use esp32_tamagotchi::factory::factory::Factory;
 use esp32_tamagotchi::peripherals::timer::TimerPeripherals;
 use esp32_tamagotchi::service::ble::advertise_service::AdvertiseService;
-use esp32_tamagotchi::service::ble::gatt_service::{self, GattService};
-use esp32_tamagotchi::service::ble::storage_service::{get_first_bonded, load_bonding_info};
+use esp32_tamagotchi::service::ble::gatt_service::{GattService};
+use esp32_tamagotchi::service::ble::storage_service::{get_first_bonded};
 use log::info;
 use trouble_host::Address;
-use trouble_host::prelude::{BdAddr, EventHandler, ExternalController};
-use embassy_executor::Spawner;
-use core::cell::RefCell;
-use heapless::Deque;
+use trouble_host::prelude::{ExternalController};
 use trouble_host::prelude::*;
 use embassy_futures::join::join;
 
@@ -165,44 +157,4 @@ async fn main(_spawner: embassy_executor::Spawner) {
         }
     })
     .await;
-
-    // SCANING PART
-    // let printer = Printer {
-    //     seen: RefCell::new(Deque::new()),
-    // };
-    // let mut scanner = Scanner::new(central);
-    // let _ = join(runner.run_with_handler(&printer), async {
-    //     let mut config = ScanConfig::default();
-    //     config.active = true;
-    //     config.phys = PhySet::M1;
-    //     config.interval = embassy_time::Duration::from_secs(1);
-    //     config.window = embassy_time::Duration::from_secs(1);
-    //     let mut _session = scanner.scan(&config).await.unwrap();
-        
-        
-    //     // Scan forever
-    //     loop {
-    //         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-    //     }
-    // })
-    // .await;
-}
-
-struct Printer {
-    seen: RefCell<Deque<BdAddr, 128>>,
-}
-
-impl EventHandler for Printer {
-    fn on_adv_reports(&self, mut it: LeAdvReportsIter<'_>) {
-        let mut seen = self.seen.borrow_mut();
-        while let Some(Ok(report)) = it.next() {
-            if seen.iter().find(|b| b.raw() == report.addr.raw()).is_none() {
-                info!("discovered: {:?}", report.addr);
-                if seen.is_full() {
-                    seen.pop_front();
-                }
-                seen.push_back(report.addr).unwrap();
-            }
-        }
-    }
 }

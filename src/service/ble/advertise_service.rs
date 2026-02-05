@@ -1,8 +1,8 @@
 use core::usize;
 
-use embassy_sync::blocking_mutex::{CriticalSectionMutex, raw::{CriticalSectionRawMutex, NoopRawMutex}};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use log::{error, info};
-use trouble_host::{Controller, Stack, advertise, gatt::GattConnection, prelude::{AdStructure, AdvertisementParameters, AttributeServer, Connection, DefaultPacketPool, Peripheral, TxPower}};
+use trouble_host::{Controller, Stack, advertise, gatt::GattConnection, prelude::{AdStructure, AdvertisementParameters, AttributeServer, DefaultPacketPool, Peripheral, TxPower}};
 
 
 pub struct AdvertiseService {
